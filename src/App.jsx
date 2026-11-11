@@ -1,0 +1,183 @@
+import { useState, useEffect } from 'react'
+import { PokemonCard } from './components/PokemonCard'
+import {
+  MAX_EQUIPO, MENSAJES, crearEquipo, agregarPokemon, quitarPokemon, ponerNombre, validarEquipo,
+} from './logic/equipo'
+import { guardarEquipo, cargarEquipos, borrarEquipo } from './data/equipo'
+import { buscarPokemon, listarPokemones } from './data/pokemones'
+import './App.css'
+
+const LIMITE = 25 // pokemones por página
+
+function App() {
+  const [pokemones, setPokemones] = useState([])
+  const [cargando, setCargando] = useState(true)
+  const [error, setError] = useState(null)
+
+  const [equipo, setEquipo] = useState(crearEquipo())  // el equipo que estás armando
+  const [guardados, setGuardados] = useState([])        // los equipos que ya están en Firestore
+  const [guardando, setGuardando] = useState(false)
+  const [errorEquipo, setErrorEquipo] = useState(null)
+
+  const [offset, setOffset] = useState(0)   // desde qué pokemon empieza la página
+  const [total, setTotal] = useState(0)     // cuántos pokemones hay en la API
+
+  const [texto, setTexto] = useState('')        // lo que se escribe
+  const [consulta, setConsulta] = useState('')  // lo que se busca ('' = ver la lista)
+  //maximo 6, sin repetidos elas decide logic/equipo.js 
+  function agregar(p) {
+    setEquipo(agregarPokemon(equipo, p))
+  }
+
+  function quitar(id) {
+    setEquipo(quitarPokemon(equipo, id))
+  }
+
+  // Hablar con firestore data/equipos.js
+  async function guardar(e) {
+    e.preventDefault(equipo)
+    setGuardando(true)
+    setErrorEquipo(null)
+    try {
+      await guardarEquipo(equipo)
+      setEquipo(crearEquipo())
+      setGuardados(await cargarEquipos())
+    } catch (err) {
+      setErrorEquipo(`No se pudo guardar el equipo: ${err.message}`)
+    } finally {
+      setGuardando(false)
+    }
+  }
+
+  async function borrar(id) {
+    setErrorEquipo(null)
+    try {
+      await borrarEquipo(id)
+      setGuardados(guardados.filter((g) => g.id !== id))
+    } catch (err) {
+      setErrorEquipo(`No se pudo eliminr el equipo ${err.message}`)
+    }
+  }
+
+  function buscar(e) {
+    e.preventDefault()
+    setConsulta(texto.trim().toLowerCase())
+  }
+
+  function verTodos() {
+    setTexto('')
+    setConsulta('')
+  }
+
+  useEffect(() => {
+    let cancelado = false // 1. evita mostrar una respuesta vieja si cambias de página rápido
+
+    async function cargar() {
+      setCargando(true)
+      setError(null)
+      try {
+        if (consulta) {
+          const pokemon = await buscarPokemon(consulta)
+          if (!cancelado) setPokemones([pokemon])
+        } else {
+          const pagina = await listarPokemones(offset, LIMITE)
+          if (!cancelado) {
+            setTotal(pagina.total)
+            setPokemones(pagina.pokemones)
+          }
+        }
+      } catch (err) {
+        if (!cancelado) setError(err.message)
+      } finally {
+        if (!cancelado) setCargando(false)
+      }
+    }
+    cargar()
+
+    return () => { cancelado = true }
+  }, [offset, consulta])
+
+  useEffect(() => {
+    cargarEquipos()
+      .then(setGuardados)
+      .catch((e) => setErrorEquipo(`No se pudo cargar el equipo: ${e.message}`))
+  }, [])
+
+  const desde = offset + 1
+  const hasta = Math.min(offset + LIMITE, total)
+
+  /*
+  PRIMERA PUERTA (la segunda esta en data)
+  */
+  const { valido, errores } = validarEquipo(equipo) 
+
+  return (
+    <main>
+      <h1>Pokédex</h1>
+      <form onSubmit={buscar}>
+        <input
+          value={texto}
+          onChange={e => setTexto(e.target.value)}
+          placeholder="Nombre o número"
+        />
+        <button type="submit">Buscar</button>
+      </form>
+
+      {!consulta && (
+        <div className="navegacion">
+          <button
+            disabled={cargando || offset === 0}
+            onClick={() => setOffset(offset - LIMITE)}
+          >
+            Anterior
+          </button>
+          <span>{total > 0 && `${desde}–${hasta} de ${total}`}</span>
+          <button
+            disabled={cargando || offset + LIMITE >= total}
+            onClick={() => setOffset(offset + LIMITE)}
+          >
+            Siguiente
+          </button>
+        </div>
+      )}
+
+      <h2>Mi equipo ({equipo.pokemones.length} / {MAX_EQUIPO})</h2>
+      <form onSubmit={guardar}>
+        <input
+        value={equipo.nombre}
+        onChange={e => setEquipo(ponerNombre(equipo, e.target.value))}
+        placeholder='Nombre del equipo'
+        />
+        <button type="submit" disabled={!valido || guardando}>
+          {guardando ? 'Guardando...': 'Guardar equipo'} {/*y esta linea? */}
+        </button>
+      </form>
+      {!valido && <p>{errores.map((codigo)=>MENSAJES[codigo]).join(' . ')}</p>}{/*codigo?? */}
+      {errorEquipo && <p className='error'>{errorEquipo}</p>}
+      <section className='equipo'>
+        {equipo.pokemones.map((p)=><PokemonCard key={p.id} pokemon={p} onQuitar={quitar}/>)}
+      </section>
+
+      {cargando && <p>Cargando...</p>}
+      {error && <p className='error'>{error}</p>}
+      {!cargando && !error && (
+        <section className="grid">
+            {pokemones.map(p => <PokemonCard key={p.id} pokemon={p} onAgregar={agregar}/>)}
+        </section>
+      )}
+
+      <h2>Equipos guardados</h2>
+      {guardados.length === 0 && <p>Todavia no hay equipos gusrdados</p>}
+      {guardados.map((g)=>(
+        <article key={g.id}>
+          <h3>{g.nombre} <button onClick={()=> borrar(g.id)}>borrar</button></h3>
+          <section className='equipo'>
+            {g.pokemones.map((p)=> <PokemonCard key={p.id} pokemon={p}/>)}
+          </section>
+        </article>
+      ))}
+    </main>
+  )
+}
+
+export default App
